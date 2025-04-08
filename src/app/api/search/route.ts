@@ -1,17 +1,8 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { Embeddings } from '@langchain/core/embeddings';
-import { ChatOpenAI } from '@langchain/openai';
-import {
-  getAvailableChatModelProviders,
-  getAvailableEmbeddingModelProviders,
-} from '@/lib/providers';
+import { AzureChatOpenAI, AzureOpenAIEmbeddings } from '@langchain/openai';
 import { AIMessage, BaseMessage, HumanMessage } from '@langchain/core/messages';
 import { MetaSearchAgentType } from '@/lib/search/metaSearchAgent';
-import {
-  getCustomOpenaiApiKey,
-  getCustomOpenaiApiUrl,
-  getCustomOpenaiModelName,
-} from '@/lib/config';
 import { searchHandlers } from '@/lib/search';
 
 interface chatModel {
@@ -37,6 +28,20 @@ interface ChatRequestBody {
   systemInstructions?: string;
 }
 
+const embeddings = new AzureOpenAIEmbeddings({
+  azureOpenAIApiKey: process.env.AZURE_EMBEDDINGS_KEY,
+  azureOpenAIApiInstanceName: process.env.AZURE_EMBEDDINGS_INSTANCE_NAME || "aiinstance2024",
+  azureOpenAIApiDeploymentName: process.env.AZURE_EMBEDDINGS_DEPLOYMENT_NAME || "text-embedding-3-large",
+  azureOpenAIApiVersion: process.env.AZURE_EMBEDDINGS_API_VERSION || "2024-02-01",
+}) as Embeddings;
+
+const llm = new AzureChatOpenAI({
+  azureOpenAIApiKey: process.env.AZURE_OPENAI_API_KEY,
+  azureOpenAIApiInstanceName: process.env.AZURE_OPENAI_API_INSTANCE_NAME,
+  azureOpenAIApiDeploymentName: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME || "gpt-4o-perplexica",
+  azureOpenAIApiVersion: process.env.AZURE_OPENAI_API_VERSION || "2025-01-01-preview",
+}) as BaseChatModel;
+
 export const POST = async (req: Request) => {
   try {
     const body: ChatRequestBody = await req.json();
@@ -57,62 +62,7 @@ export const POST = async (req: Request) => {
         ? new HumanMessage({ content: msg[1] })
         : new AIMessage({ content: msg[1] });
     });
-
-    const [chatModelProviders, embeddingModelProviders] = await Promise.all([
-      getAvailableChatModelProviders(),
-      getAvailableEmbeddingModelProviders(),
-    ]);
-
-    const chatModelProvider =
-      body.chatModel?.provider || Object.keys(chatModelProviders)[0];
-    const chatModel =
-      body.chatModel?.name ||
-      Object.keys(chatModelProviders[chatModelProvider])[0];
-
-    const embeddingModelProvider =
-      body.embeddingModel?.provider || Object.keys(embeddingModelProviders)[0];
-    const embeddingModel =
-      body.embeddingModel?.name ||
-      Object.keys(embeddingModelProviders[embeddingModelProvider])[0];
-
-    let llm: BaseChatModel | undefined;
-    let embeddings: Embeddings | undefined;
-
-    if (body.chatModel?.provider === 'custom_openai') {
-      llm = new ChatOpenAI({
-        modelName: body.chatModel?.name || getCustomOpenaiModelName(),
-        openAIApiKey:
-          body.chatModel?.customOpenAIKey || getCustomOpenaiApiKey(),
-        temperature: 0.7,
-        configuration: {
-          baseURL:
-            body.chatModel?.customOpenAIBaseURL || getCustomOpenaiApiUrl(),
-        },
-      }) as unknown as BaseChatModel;
-    } else if (
-      chatModelProviders[chatModelProvider] &&
-      chatModelProviders[chatModelProvider][chatModel]
-    ) {
-      llm = chatModelProviders[chatModelProvider][chatModel]
-        .model as unknown as BaseChatModel | undefined;
-    }
-
-    if (
-      embeddingModelProviders[embeddingModelProvider] &&
-      embeddingModelProviders[embeddingModelProvider][embeddingModel]
-    ) {
-      embeddings = embeddingModelProviders[embeddingModelProvider][
-        embeddingModel
-      ].model as Embeddings | undefined;
-    }
-
-    if (!llm || !embeddings) {
-      return Response.json(
-        { message: 'Invalid model selected' },
-        { status: 400 },
-      );
-    }
-
+    
     const searchHandler: MetaSearchAgentType = searchHandlers[body.focusMode];
 
     if (!searchHandler) {

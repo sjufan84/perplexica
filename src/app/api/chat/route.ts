@@ -3,24 +3,14 @@ import MetaSearchAgent from '@/lib/search/metaSearchAgent';
 import crypto from 'crypto';
 import { AIMessage, BaseMessage, HumanMessage } from '@langchain/core/messages';
 import { EventEmitter } from 'stream';
-import {
-  chatModelProviders,
-  embeddingModelProviders,
-  getAvailableChatModelProviders,
-  getAvailableEmbeddingModelProviders,
-} from '@/lib/providers';
 import db from '@/lib/db';
 import { chats, messages as messagesSchema } from '@/lib/db/schema';
 import { and, eq, gt } from 'drizzle-orm';
 import { getFileDetails } from '@/lib/utils/files';
 import { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import { ChatOpenAI } from '@langchain/openai';
-import {
-  getCustomOpenaiApiKey,
-  getCustomOpenaiApiUrl,
-  getCustomOpenaiModelName,
-} from '@/lib/config';
+import { AzureChatOpenAI, AzureOpenAIEmbeddings } from '@langchain/openai';
 import { searchHandlers } from '@/lib/search';
+import { Embeddings } from '@langchain/core/embeddings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -51,6 +41,20 @@ type Body = {
   embeddingModel: EmbeddingModel;
   systemInstructions: string;
 };
+
+const embeddings = new AzureOpenAIEmbeddings({
+  azureOpenAIApiKey: process.env.AZURE_EMBEDDINGS_KEY,
+  azureOpenAIApiInstanceName: process.env.AZURE_EMBEDDINGS_INSTANCE_NAME || "aiinstance2024",
+  azureOpenAIApiDeploymentName: process.env.AZURE_EMBEDDINGS_DEPLOYMENT_NAME || "text-embedding-3-large",
+  azureOpenAIApiVersion: process.env.AZURE_EMBEDDINGS_API_VERSION || "2024-02-01",
+}) as Embeddings;
+
+const llm = new AzureChatOpenAI({
+  azureOpenAIApiKey: process.env.AZURE_OPENAI_API_KEY,
+  azureOpenAIApiInstanceName: process.env.AZURE_OPENAI_API_INSTANCE_NAME,
+  azureOpenAIApiDeploymentName: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME || "gpt-4o-perplexica",
+  azureOpenAIApiVersion: process.env.AZURE_OPENAI_API_VERSION || "2025-01-01-preview",
+}) as BaseChatModel;
 
 const handleEmitterEvents = async (
   stream: EventEmitter,
@@ -195,55 +199,6 @@ export const POST = async (req: Request) => {
       );
     }
 
-    const [chatModelProviders, embeddingModelProviders] = await Promise.all([
-      getAvailableChatModelProviders(),
-      getAvailableEmbeddingModelProviders(),
-    ]);
-
-    const chatModelProvider =
-      chatModelProviders[
-        body.chatModel?.provider || Object.keys(chatModelProviders)[0]
-      ];
-    const chatModel =
-      chatModelProvider[
-        body.chatModel?.name || Object.keys(chatModelProvider)[0]
-      ];
-
-    const embeddingProvider =
-      embeddingModelProviders[
-        body.embeddingModel?.provider || Object.keys(embeddingModelProviders)[0]
-      ];
-    const embeddingModel =
-      embeddingProvider[
-        body.embeddingModel?.name || Object.keys(embeddingProvider)[0]
-      ];
-
-    let llm: BaseChatModel | undefined;
-    let embedding = embeddingModel.model;
-
-    if (body.chatModel?.provider === 'custom_openai') {
-      llm = new ChatOpenAI({
-        openAIApiKey: getCustomOpenaiApiKey(),
-        modelName: getCustomOpenaiModelName(),
-        temperature: 0.7,
-        configuration: {
-          baseURL: getCustomOpenaiApiUrl(),
-        },
-      }) as unknown as BaseChatModel;
-    } else if (chatModelProvider && chatModel) {
-      llm = chatModel.model;
-    }
-
-    if (!llm) {
-      return Response.json({ error: 'Invalid chat model' }, { status: 400 });
-    }
-
-    if (!embedding) {
-      return Response.json(
-        { error: 'Invalid embedding model' },
-        { status: 400 },
-      );
-    }
 
     const humanMessageId =
       message.messageId ?? crypto.randomBytes(7).toString('hex');
@@ -276,7 +231,7 @@ export const POST = async (req: Request) => {
       message.content,
       history,
       llm,
-      embedding,
+      embeddings,
       body.optimizationMode,
       body.files,
       body.systemInstructions,
